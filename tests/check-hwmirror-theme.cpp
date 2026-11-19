@@ -350,6 +350,30 @@ int main() {
         assert(EqualRect(&lateViewport, &viewport));
         g_needUpdate(geometry.manager);
     }
+    // Menu commands and hide/show used to discard the restored-height guard.
+    // A late compact layout then became the baseline on every following cycle.
+    for (int cycle = 0; cycle < 20; ++cycle) {
+        assert(CompactWindow(geometry));
+        SendMessageW(geometry.window, WM_SHOWWINDOW, FALSE, 0);
+        SendMessageW(geometry.window, WM_SHOWWINDOW, TRUE, 0);
+        assert(!geometry.compact && geometry.protectExpandedHeight);
+        SendMessageW(geometry.window, WM_SYSCOMMAND, SC_KEYMENU, 0);
+        assert(geometry.protectExpandedHeight);
+        SetWindowPos(geometry.window, nullptr, 0, 0,
+            expanded.right - expanded.left, expanded.bottom - expanded.top - 72,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        RECT afterShow;
+        GetWindowRect(geometry.window, &afterShow);
+        assert(EqualRect(&afterShow, &expanded));
+        g_needUpdate(geometry.manager);
+        geometry.readyAfter = 0;
+        AlignVideoWindow(geometry);
+        assert(!geometry.sessionNeedsRefresh);
+        assert(CompactWindow(geometry));
+        assert(RestoreCompactWindow(geometry));
+        GetWindowRect(geometry.window, &afterShow);
+        assert(EqualRect(&afterShow, &expanded));
+    }
     geometry.moving = true;
     WINDOWPOS manualHeight{};
     manualHeight.cx = expanded.right - expanded.left;

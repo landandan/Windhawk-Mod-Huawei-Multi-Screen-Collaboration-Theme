@@ -2,7 +2,7 @@
 // @id              hwmirror-theme
 // @name            Huawei Multi-Screen Collaboration Theme
 // @description     Windows theme and hover auto-hide for the HwMirror title bar and navigation bar.
-// @version         1.18
+// @version         1.19
 // @include         HwMirror.exe
 // @architecture    x86-64
 // @compilerOptions -ladvapi32 -lgdi32 -lgdiplus -luser32 -lcomctl32 -lmsimg32 -ldwmapi
@@ -1086,8 +1086,14 @@ LRESULT CALLBACK WindowSubclass(HWND window, UINT message, WPARAM wparam,
     }
     if (message == WM_SHOWWINDOW && !state->changingGeometry) {
         if (RestoreCompactWindow(*state, false)) {
+            // Visibility changes invalidate control/video handles, but a posted
+            // compact layout must not replace the restored outer height.
+            const bool protectHeight = state->protectExpandedHeight;
+            const RECT expanded = state->expandedBounds;
             RestoreWindowRegion(*state);
             ResetSessionLayout(*state);
+            state->protectExpandedHeight = protectHeight && !state->landscape;
+            state->expandedBounds = expanded;
         }
     }
     if (message == WM_SIZE && wparam == SIZE_RESTORED &&
@@ -1096,8 +1102,7 @@ LRESULT CALLBACK WindowSubclass(HWND window, UINT message, WPARAM wparam,
         state->readyAfter = GetTickCount64() + 200;
     }
     if (message == WM_CLOSE || message == WM_DPICHANGED ||
-        message == WM_ENTERSIZEMOVE || message == WM_SYSCOMMAND ||
-        (message == WM_SHOWWINDOW && !wparam)) {
+        message == WM_ENTERSIZEMOVE) {
         DismissTransitionCover(*state);
         state->protectExpandedHeight = false;
     }
