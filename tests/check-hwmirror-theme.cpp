@@ -374,6 +374,40 @@ int main() {
         GetWindowRect(geometry.window, &afterShow);
         assert(EqualRect(&afterShow, &expanded));
     }
+    // Exercise actual taskbar-style commands and the ShowWindow path that
+    // bypasses SC_MINIMIZE, including Windows' saved normal rectangle.
+    for (bool direct : {false, true}) {
+        for (int cycle = 0; cycle < 5; ++cycle) {
+            assert(CompactWindow(geometry));
+            if (direct) ShowWindow(geometry.window, SW_SHOWMINNOACTIVE);
+            else SendMessageW(geometry.window, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+            assert(IsIconic(geometry.window));
+            assert(!geometry.compact);
+            WINDOWPLACEMENT saved{sizeof(saved)};
+            assert(GetWindowPlacement(geometry.window, &saved));
+            assert(saved.rcNormalPosition.bottom - saved.rcNormalPosition.top ==
+                expanded.bottom - expanded.top);
+            SendMessageW(geometry.window, WM_SYSCOMMAND, SC_RESTORE, 0);
+            assert(!IsIconic(geometry.window));
+            SetWindowPos(geometry.window, nullptr, 0, 0,
+                expanded.right - expanded.left, expanded.bottom - expanded.top - 72,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            RECT restoredTaskbar;
+            GetWindowRect(geometry.window, &restoredTaskbar);
+            if (!EqualRect(&restoredTaskbar, &expanded)) {
+                printf("Taskbar direct=%d cycle=%d guard=%d expected=%ld,%ld,%ld,%ld actual=%ld,%ld,%ld,%ld\n",
+                    direct, cycle, geometry.protectExpandedHeight,
+                    expanded.left, expanded.top, expanded.right, expanded.bottom,
+                    restoredTaskbar.left, restoredTaskbar.top, restoredTaskbar.right, restoredTaskbar.bottom);
+                fflush(stdout);
+            }
+            assert(EqualRect(&restoredTaskbar, &expanded));
+            ShowWindow(geometry.window, SW_HIDE);
+            g_needUpdate(geometry.manager);
+            geometry.readyAfter = 0;
+            AlignVideoWindow(geometry);
+        }
+    }
     geometry.moving = true;
     WINDOWPOS manualHeight{};
     manualHeight.cx = expanded.right - expanded.left;

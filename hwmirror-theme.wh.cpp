@@ -2,7 +2,7 @@
 // @id              hwmirror-theme
 // @name            Huawei Multi-Screen Collaboration Theme
 // @description     Windows theme and hover auto-hide for the HwMirror title bar and navigation bar.
-// @version         1.19
+// @version         1.20
 // @include         HwMirror.exe
 // @architecture    x86-64
 // @compilerOptions -ladvapi32 -lgdi32 -lgdiplus -luser32 -lcomctl32 -lmsimg32 -ldwmapi
@@ -723,6 +723,29 @@ bool RestoreCompactWindow(WindowState& state, bool preserveFrame = true) {
     return restored;
 }
 
+void RestoreMinimizedLayout(WindowState& state) {
+    if (!state.compact || !state.hasGeometrySnapshot || state.changingGeometry) return;
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(placement);
+    if (!GetWindowPlacement(state.window, &placement)) return;
+    // ShowWindow(SW_MINIMIZE) can bypass SC_MINIMIZE. At WM_SIZE it is too
+    // late to resize the HWND: update its saved normal rectangle instead.
+    RECT& normal = placement.rcNormalPosition;
+    OffsetRect(&normal, state.expandedBounds.left - state.compactBounds.left,
+               state.expandedBounds.top - state.compactBounds.top);
+    normal.right = normal.left + state.expandedBounds.right - state.expandedBounds.left;
+    normal.bottom = normal.top + state.expandedBounds.bottom - state.expandedBounds.top;
+    state.changingGeometry = true;
+    if (SetWindowPlacement(state.window, &placement)) {
+        state.compact = false;
+        state.hasGeometrySnapshot = false;
+        state.protectExpandedHeight = !state.landscape;
+        SetCompactControls(state, true);
+        RestoreWindowRegion(state);
+    }
+    state.changingGeometry = false;
+}
+
 void ResetSessionLayout(WindowState& state) {
     DismissTransitionCover(state);
     state.canvas = nullptr;
@@ -868,11 +891,17 @@ void ConstrainCompactResize(WindowState& state, WINDOWPOS& position) {
     if (state.changingGeometry || (position.flags & SWP_NOSIZE)) {
         return;
     }
+    // The minimized icon rectangle is not a new phone/window size.
+    if (IsIconic(state.window)) return;
     RECT current;
     if (!GetWindowRect(state.window, &current)) return;
     if (!state.compact) {
-        if (state.moving || position.cx != current.right - current.left ||
-            IsZoomed(state.window) || IsIconic(state.window)) {
+        // During restore GetWindowRect can still report the minimized icon.
+        const int expectedWidth = state.protectExpandedHeight
+            ? state.expandedBounds.right - state.expandedBounds.left
+            : current.right - current.left;
+        if (state.moving || position.cx != expectedWidth ||
+            IsZoomed(state.window)) {
             state.protectExpandedHeight = false;
         } else if (state.protectExpandedHeight) {
             // Late aspect-ratio/layout updates from a hover transition must
@@ -1084,7 +1113,10 @@ LRESULT CALLBACK WindowSubclass(HWND window, UINT message, WPARAM wparam,
         ForgetWindow(state);
         return DefSubclassProc(window, message, wparam, lparam);
     }
-    if (message == WM_SHOWWINDOW && !state->changingGeometry) {
+    if (message == WM_SIZE && wparam == SIZE_MINIMIZED && IsIconic(window)) {
+        RestoreMinimizedLayout(*state);
+    }
+    if (message == WM_SHOWWINDOW && !state->changingGeometry && !IsIconic(window)) {
         if (RestoreCompactWindow(*state, false)) {
             // Visibility changes invalidate control/video handles, but a posted
             // compact layout must not replace the restored outer height.
@@ -1118,10 +1150,14 @@ LRESULT CALLBACK WindowSubclass(HWND window, UINT message, WPARAM wparam,
          (message == WM_SYSCOMMAND &&
           ((wparam & 0xfff0) == SC_MINIMIZE || (wparam & 0xfff0) == SC_MAXIMIZE ||
            (wparam & 0xfff0) == SC_RESTORE)) ||
-         (message == WM_SIZE &&
-          (wparam == SIZE_MINIMIZED || wparam == SIZE_MAXIMIZED)))) {
+         (message == WM_SIZE && wparam == SIZE_MAXIMIZED))) {
         RestoreCompactWindow(*state, false);
-        state->protectExpandedHeight = false;
+        // Taskbar minimize/restore must retain the expanded baseline. Maximize,
+        // DPI and user resizing intentionally establish a different size.
+        if (!(message == WM_SYSCOMMAND &&
+              ((wparam & 0xfff0) == SC_MINIMIZE || (wparam & 0xfff0) == SC_RESTORE))) {
+            state->protectExpandedHeight = false;
+        }
     }
     if (message == WM_WINDOWPOSCHANGING) {
         ConstrainCompactResize(*state, *reinterpret_cast<WINDOWPOS*>(lparam));
